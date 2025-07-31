@@ -1,0 +1,10 @@
+
+	.text
+	.global myfunc
+
+#if 1
+myfunc:
+
+	adds r0, #1
+	bx lr
+#endif

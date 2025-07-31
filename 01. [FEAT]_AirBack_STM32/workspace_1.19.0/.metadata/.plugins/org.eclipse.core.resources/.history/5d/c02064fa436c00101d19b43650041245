@@ -1,0 +1,10 @@
+	.syntax unified
+	.cpu cortex-m3
+	.thumb
+
+	.global myfunc
+	.type myfunc, %function
+
+myfunc:
+	adds r0, #1
+	bx lr

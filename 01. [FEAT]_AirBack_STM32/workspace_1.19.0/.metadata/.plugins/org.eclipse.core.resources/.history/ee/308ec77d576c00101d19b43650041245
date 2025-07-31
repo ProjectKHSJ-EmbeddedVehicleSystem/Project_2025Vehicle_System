@@ -1,0 +1,22 @@
+	.syntax unified
+	.cpu cortex-m3
+	.thumb
+
+	.global myfunc
+	.type myfunc, %function
+	.type branch, %function
+
+myfunc:
+	adds r0, #1
+	bx lr
+
+brach:
+	cmp r0,r1
+	bge 1f
+	blt 2f
+
+1:
+	bx lr
+2:
+	mov r0,r1
+	bx lr
