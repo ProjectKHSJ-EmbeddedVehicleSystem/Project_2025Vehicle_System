@@ -98,8 +98,13 @@ release/              # Release build directory (common Qt Creator default)
 *.ewp                 # IAR EWARM project
 *.eww                 # IAR EWARM workspace file
 *.log                 # Build logs
-Debug/                # Debug build folder (common)
-Release/              # Release build folder (common)
+[Dd]ebug/                # Debug build folder (common)
+[Rr]elease/              # Release build folder (common)
+*.launch
+*.lst
+*.map
+*.d
+*.dep
 
 # =========================================================
 # Other common temporary or generated files
