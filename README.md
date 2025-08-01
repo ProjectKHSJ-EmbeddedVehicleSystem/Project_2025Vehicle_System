@@ -2,7 +2,7 @@
 고신뢰성 모듈형 제어 시스템: CAN 버스와 RTOS 스케줄링 융합 실시간 제어 시스템
 
 - 원격회의 : [디스코드](https://discord.gg/kcJr6w6eAq)
-- 프로젝트 관리 : [Jira](https://iotkhsj.atlassian.net/jira/software/projects/KAN/list)
+- 프로젝트 일정&이슈 관리 : [Jira](https://iotkhsj.atlassian.net/jira/software/projects/KAN/list)
 ## Directory
 |폴더명|설명|
 |:--:|:--:|
