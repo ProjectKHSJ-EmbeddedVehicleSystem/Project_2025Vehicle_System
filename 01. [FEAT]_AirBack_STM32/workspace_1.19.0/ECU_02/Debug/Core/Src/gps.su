@@ -1,0 +1,6 @@
+../Core/Src/gps.c:12:12:nmea_checksum_ok	24	static
+../Core/Src/gps.c:23:15:dm_to_deg	48	static
+../Core/Src/gps.c:31:13:parse_gprmc	152	static
+../Core/Src/gps.c:71:6:GPS_Init	4	static
+../Core/Src/gps.c:77:6:GPS_OnByte	24	static
+../Core/Src/gps.c:103:6:GPS_GetLatestFix	24	static
