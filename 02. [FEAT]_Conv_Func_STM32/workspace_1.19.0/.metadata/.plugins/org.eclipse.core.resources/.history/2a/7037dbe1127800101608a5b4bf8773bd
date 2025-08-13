@@ -1,0 +1,381 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* ===== FreeRTOS ===== */
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "timers.h"
+
+/* Private typedef -----------------------------------------------------------*/
+/* 이벤트 정의 */
+typedef enum {
+  EVT_BTN_DOWN = 1,
+  EVT_BTN_UP,
+  EVT_GEAR_EDGE
+} evt_type_t;
+
+typedef struct {
+  evt_type_t type;
+  uint32_t   tick;
+  uint16_t   pin;
+  uint8_t    level; // 0=Low,1=High (GEAR용)
+} evt_t;
+
+/* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim3;
+UART_HandleTypeDef huart2;
+
+/* ===== RTOS 객체 ===== */
+static QueueHandle_t  qBtn;        // 버튼 이벤트 큐
+static QueueHandle_t  qGear;       // 기어 이벤트 큐
+static TimerHandle_t  tBtnRelease; // 버튼 릴리즈 감시 타이머
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_USART2_UART_Init(void);
+static void MX_TIM3_Init(void);
+
+/* ===== 유저 파라미터 ===== */
+#define PWM_MAX              900
+#define START_DUTY           200
+#define PWM_STEP             8
+#define STEP_PERIOD_MS       35
+
+#define DEBOUNCE_MS_PRESS    60   // 버튼 눌림 디바운스
+#define DEBOUNCE_MS_RELEASE  40   // 버튼 해제 안정 확인
+#define RELEASE_POLL_MS      10   // 릴리즈 타이머 폴링 주기
+
+/* ===== 상태 ===== */
+static volatile uint8_t  g_pressed      = 0;
+static volatile uint16_t g_pwm          = 0;
+static uint32_t          g_last_step_ms = 0;
+
+typedef enum { GEAR_NEUTRAL = 0, GEAR_FWD = +1, GEAR_BACK = -1 } gear_t;
+static volatile gear_t g_gear = GEAR_NEUTRAL;
+
+/* ===== 모터 유틸 ===== */
+static inline void Motor_SetDuty(uint16_t d){
+  if (d > PWM_MAX) d = PWM_MAX;
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, d);
+  g_pwm = d;
+}
+static inline void Motor_Fwd(void){
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_RESET);
+}
+static inline void Motor_Bck(void){
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET);
+}
+static inline void Motor_Stop(void){
+  Motor_SetDuty(0);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10 | GPIO_PIN_11, GPIO_PIN_RESET);
+}
+
+/* ===== 기어 판정 ===== */
+static inline gear_t ReadGear_HoldPrev(gear_t prev)
+{
+  GPIO_PinState p8 = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_8); // FWD (LOW=선택)
+  GPIO_PinState p6 = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_6); // BACK(LOW=선택)
+
+  if (p8 == GPIO_PIN_RESET && p6 == GPIO_PIN_SET)  return GEAR_FWD;
+  if (p6 == GPIO_PIN_RESET && p8 == GPIO_PIN_SET)  return GEAR_BACK;
+  if (p8 == GPIO_PIN_SET && p6 == GPIO_PIN_SET)    return GEAR_NEUTRAL; // 확실한 중립
+  /* 둘 다 LOW는 통과구간/노이즈 → 이전 상태 유지 */
+  return prev;
+}
+
+/* ===== 릴리즈 타이머 콜백 ===== */
+static void BtnReleaseTimerCb(TimerHandle_t xTimer) {
+  (void)xTimer;
+  static uint32_t highStart = 0;
+  TickType_t now = xTaskGetTickCount();
+
+  if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_5) == GPIO_PIN_SET) { // High 유지 중
+    if (highStart == 0) highStart = now;
+    if ((now - highStart) >= pdMS_TO_TICKS(DEBOUNCE_MS_RELEASE)) {
+      evt_t e = { .type = EVT_BTN_UP, .tick = now, .pin = GPIO_PIN_5, .level = 1 };
+      xQueueSend(qBtn, &e, 0);
+      highStart = 0;
+      // 다음 해제까지 멈춤 (one-shot)
+      return;
+    }
+  } else {
+    highStart = 0; // 다시 Low면 초기화
+  }
+  // 아직 안정 안 됨 → 다음 주기에도 체크
+  xTimerStart(tBtnRelease, 0);
+}
+
+/* ===== 태스크 ===== */
+static void ButtonTask(void *arg)
+{
+  (void)arg;
+  evt_t e;
+
+  for(;;) {
+    if (xQueueReceive(qBtn, &e, portMAX_DELAY) == pdTRUE) {
+      if (e.type == EVT_BTN_DOWN) {
+        if (!g_pressed) {
+          g_pressed = 1;
+          g_last_step_ms = HAL_GetTick();
+          if (g_gear != GEAR_NEUTRAL) Motor_SetDuty(START_DUTY);
+#ifdef LD2_Pin
+          HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+#endif
+        }
+      }
+      else if (e.type == EVT_BTN_UP) {
+        if (g_pressed) {
+          g_pressed = 0;
+          Motor_Stop();
+#ifdef LD2_Pin
+          HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+#endif
+        }
+      }
+    }
+  }
+}
+
+static void GearTask(void *arg)
+{
+  (void)arg;
+  evt_t e;
+
+  for(;;) {
+    if (xQueueReceive(qGear, &e, portMAX_DELAY) == pdTRUE) {
+      if (e.type == EVT_GEAR_EDGE) {
+        gear_t newg = ReadGear_HoldPrev(g_gear);
+        g_gear = newg;
+        if (g_gear == GEAR_NEUTRAL) {
+          g_pressed = 0;
+          Motor_Stop();
+        }
+      }
+    }
+  }
+}
+
+static void MotorTask(void *arg)
+{
+  (void)arg;
+  const TickType_t period = pdMS_TO_TICKS(10);
+  TickType_t last = xTaskGetTickCount();
+
+  for(;;) {
+    // 하드 인터록: 핀 직접 읽어 중립이면 즉시 정지
+    GPIO_PinState p8 = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_8);
+    GPIO_PinState p6 = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_6);
+    if (p8==GPIO_PIN_SET && p6==GPIO_PIN_SET) {
+      g_gear = GEAR_NEUTRAL;
+      g_pressed = 0;
+      if (g_pwm != 0) Motor_Stop();
+      vTaskDelayUntil(&last, period);
+      continue;
+    }
+
+    if (!g_pressed || g_gear == GEAR_NEUTRAL) {
+      if (g_pwm != 0) Motor_Stop();
+    } else {
+      if (g_gear == GEAR_FWD)  Motor_Fwd();
+      else                     Motor_Bck();
+
+      uint32_t now = HAL_GetTick();
+      if ((uint32_t)(now - g_last_step_ms) >= STEP_PERIOD_MS) {
+        g_last_step_ms = now;
+        if (g_pwm < START_DUTY)      Motor_SetDuty(START_DUTY);
+        else if (g_pwm < PWM_MAX)    Motor_SetDuty(g_pwm + PWM_STEP);
+      }
+    }
+    vTaskDelayUntil(&last, period);
+  }
+}
+
+/* ===== 메인 ===== */
+int main(void)
+{
+  HAL_Init();
+  SystemClock_Config();
+
+  MX_GPIO_Init();
+  MX_USART2_UART_Init();
+  MX_TIM3_Init();
+
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+  Motor_Stop();
+  g_last_step_ms = HAL_GetTick();
+
+  /* RTOS 객체 생성 */
+  qBtn  = xQueueCreate(8, sizeof(evt_t));
+  qGear = xQueueCreate(8, sizeof(evt_t));
+  configASSERT(qBtn  != NULL);
+  configASSERT(qGear != NULL);
+
+  tBtnRelease = xTimerCreate("btnRel",
+                             pdMS_TO_TICKS(RELEASE_POLL_MS),
+                             pdFALSE, NULL, BtnReleaseTimerCb);
+  configASSERT(tBtnRelease != NULL);
+
+  /* 태스크 생성 */
+  xTaskCreate(ButtonTask, "btn",   256, NULL, tskIDLE_PRIORITY + 2, NULL);
+  xTaskCreate(GearTask,   "gear",  256, NULL, tskIDLE_PRIORITY + 2, NULL);
+  xTaskCreate(MotorTask,  "motor", 256, NULL, tskIDLE_PRIORITY + 3, NULL);
+
+  /* 스케줄러 시작 (CMSIS osKernelStart 사용 금지) */
+  vTaskStartScheduler();
+
+  /* 도달하면 메모리 부족 */
+  while (1) { }
+}
+
+/* ===== GPIO/USART/TIM 초기화 그대로 ===== */
+static void MX_TIM3_Init(void)
+{
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 71;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK) { Error_Handler(); }
+
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK) { Error_Handler(); }
+
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK) { Error_Handler(); }
+
+  HAL_TIM_MspPostInit(&htim3);
+}
+
+static void MX_USART2_UART_Init(void)
+{
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK) { Error_Handler(); }
+}
+
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_11, GPIO_PIN_RESET);
+
+  /* B1 */
+  GPIO_InitStruct.Pin = B1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
+
+  /* LD2 */
+  GPIO_InitStruct.Pin = LD2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+
+  /* PC5: 버튼 - 눌림(FALLING)만 인터럽트 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* PC6/PC8: 기어 - 양엣지 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* NVIC: FreeRTOS FromISR 안전 우선순위(보통 5) */
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+}
+
+/* SystemClock_Config, Error_Handler는 당신 프로젝트 그대로 사용 */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) { Error_Handler(); }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) { Error_Handler(); }
+}
+
+/* ===== EXTI ISR 콜백 ===== */
+void HAL_GPIO_EXTI_Callback(uint16_t pin)
+{
+  BaseType_t hpw = pdFALSE;
+  TickType_t now = xTaskGetTickCountFromISR();
+
+  if (pin == GPIO_PIN_5) { // 버튼: Falling만 들어오게 설정됨
+    static TickType_t lastPressTick = 0;
+    if ((now - lastPressTick) < pdMS_TO_TICKS(DEBOUNCE_MS_PRESS)) return;
+    lastPressTick = now;
+
+    if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_5) == GPIO_PIN_RESET) { // Low 확인
+      evt_t e = { .type = EVT_BTN_DOWN, .tick = now, .pin = GPIO_PIN_5, .level = 0 };
+      xQueueSendFromISR(qBtn, &e, &hpw);
+
+      /* 릴리즈 감시 시작 (one-shot) */
+      xTimerStartFromISR(tBtnRelease, &hpw);
+    }
+  }
+  else if (pin == GPIO_PIN_6 || pin == GPIO_PIN_8) { // 기어 엣지
+    evt_t e = { .type = EVT_GEAR_EDGE, .tick = now, .pin = pin, .level = 0 };
+    xQueueSendFromISR(qGear, &e, &hpw);
+  }
+  portYIELD_FROM_ISR(hpw);
+}
