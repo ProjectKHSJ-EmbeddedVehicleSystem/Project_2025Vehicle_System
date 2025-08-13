@@ -103,8 +103,8 @@ static inline gear_t ReadGear_HoldPrev(gear_t prev)
   GPIO_PinState p8 = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_8); // FWD (LOW=선택)
   GPIO_PinState p6 = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_6); // BACK(LOW=선택)
 
-  if (p8 == GPIO_PIN_RESET && p6 == GPIO_PIN_SET)  return GEAR_FWD;
-  if (p6 == GPIO_PIN_RESET && p8 == GPIO_PIN_SET)  return GEAR_BACK;
+  if (p6 == GPIO_PIN_RESET && p8 == GPIO_PIN_SET)  return GEAR_FWD;
+  if (p8 == GPIO_PIN_RESET && p6 == GPIO_PIN_SET)  return GEAR_BACK;
   if (p8 == GPIO_PIN_SET   && p6 == GPIO_PIN_SET)  return GEAR_NEUTRAL;
   return prev;
 }
