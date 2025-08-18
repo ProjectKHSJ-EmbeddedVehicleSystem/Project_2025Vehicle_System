@@ -6,6 +6,27 @@
 
 <img width="1412" height="611" alt="image" src="https://github.com/user-attachments/assets/9bc83b1d-2bd7-41c2-8da5-4e1a951400cf" />
 
+## 시연영상
+
+### 에어백 기능
+
+https://github.com/user-attachments/assets/db8fbe6a-bd1d-4d91-af35-287fd6e85f16
+
+---
+
+### 모터제어(엑셀) 및 기어(R,P,D) 기능
+
+
+- P, R(후진 및 주차) 테스트
+  
+https://github.com/user-attachments/assets/d02335fa-8ecc-4ec4-a7b9-64e8493b53c0
+
+
+- D단(전진) 테스트
+
+https://github.com/user-attachments/assets/a269e54d-0bfd-4194-aecd-ce7d747df16f
+
+
 
 ## Confluence Docs
 
