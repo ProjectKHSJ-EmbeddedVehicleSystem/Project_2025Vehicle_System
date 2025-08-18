@@ -9,9 +9,9 @@
 
 ## Confluence Docs
 
-- [프로젝트 컨셉 및 전체 개요.pdf](https://drive.google.com/file/d/1I1ajiGC8wo4qTgdd38HbKaoy6iAIf34t/view?usp=drive_link)
-  - [ECU_01 상세 설계.pdf](https://drive.google.com/file/d/17AZj5CPb7AHWl3_HZC4xAPMwkqz4SB1m/view?usp=drive_link)
-    
+- [프로젝트 컨셉 및 전체 개요](https://drive.google.com/file/d/1I1ajiGC8wo4qTgdd38HbKaoy6iAIf34t/view?usp=sharing)
+  - [ECU_01 상세 설계 및 진행 상황](https://drive.google.com/file/d/17AZj5CPb7AHWl3_HZC4xAPMwkqz4SB1m/view?usp=sharing)
+  - [ECU_02 상세 설계 및 진행 상황](https://drive.google.com/file/d/1J4QGpL6eGlgevUnKyyC7r0f5RvZsFnD-/view?usp=sharing)
   
 ## Directory
 |폴더명|설명|
