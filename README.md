@@ -4,7 +4,6 @@
 - 원격회의 : [디스코드](https://discord.gg/kcJr6w6eAq)
 - 프로젝트 일정&이슈 관리 : Jira , Confluence
 
-<img width="1412" height="611" alt="image" src="https://github.com/user-attachments/assets/9bc83b1d-2bd7-41c2-8da5-4e1a951400cf" />
 
 ## 시연영상
 
