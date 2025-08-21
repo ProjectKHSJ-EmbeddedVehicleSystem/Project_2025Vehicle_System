@@ -37,6 +37,6 @@ https://github.com/user-attachments/assets/a269e54d-0bfd-4194-aecd-ce7d747df16f
 |폴더명|설명|
 |:--:|:--:|
 |01. [FEAT]_AirBack_STM32|ECU_01| 
-|02. [FEAT]_Conv_Func_STM32|ECU_02|
+|02. [FEAT]_Powertrain_STM32|ECU_02|
 |03. [FEAT]_OpenCV_Raspi|-|
 
